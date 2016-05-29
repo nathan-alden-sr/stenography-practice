@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 
 namespace NathanAlden.StenographyPractice
@@ -13,6 +14,7 @@ namespace NathanAlden.StenographyPractice
         private static readonly string _configurationDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Stenography Practice");
         private static readonly string _dictionaryPath;
         private static DictionaryModel _model;
+        private static StenoDevice _stenoDevice;
 
         static Program()
         {
@@ -21,86 +23,164 @@ namespace NathanAlden.StenographyPractice
 
         private static void Main()
         {
-            Initialize();
-
-            Console.WriteLine("Stenography Practice");
-            Console.WriteLine();
-            Console.WriteLine($"Dictionary path: {_dictionaryPath}");
-            Console.WriteLine();
-
-            List<LessonModel> selectedLessons = _model.Lessons.ToList();
-
-            while (true)
+            if (!InitializeAsync().GetAwaiter().GetResult())
             {
-                Console.WriteLine($"Selected lesson{(selectedLessons.Count != 1 ? "s" : "")}: {(selectedLessons.Count == _model.Lessons.Count() ? "All" : string.Join(", ", selectedLessons.Select(x => x.Name)))}");
-                Console.WriteLine();
-                Console.WriteLine("1. Show lessons");
-                Console.WriteLine("2. Select specific lessons");
-                Console.WriteLine("3. Select all lessons");
-                Console.WriteLine("4. Start quiz");
-                Console.WriteLine("5. Start flashcards");
-                Console.WriteLine("6. Exit");
-                ConsoleKey consoleKey = Console.ReadKey(true).Key;
+                return;
+            }
 
+            try
+            {
+                Console.WriteLine("Stenography Practice");
+                Console.WriteLine();
+                Console.WriteLine($"Dictionary path: {_dictionaryPath}");
                 Console.WriteLine();
 
-                switch (consoleKey)
+                List<LessonModel> selectedLessons = _model.Lessons.ToList();
+
+                while (true)
                 {
-                    case ConsoleKey.D1:
-                    case ConsoleKey.NumPad1:
-                        foreach (string name in _model.Lessons.Select(x => x.Name))
-                        {
-                            Console.WriteLine(name);
-                        }
-                        Console.WriteLine();
-                        break;
-                    case ConsoleKey.D2:
-                    case ConsoleKey.NumPad2:
-                        Console.Write("Enter the lesson names (comma-delimited): ");
+                    Console.WriteLine($"Selected lesson{(selectedLessons.Count != 1 ? "s" : "")}: {(selectedLessons.Count == _model.Lessons.Count() ? "All" : string.Join(", ", selectedLessons.Select(x => x.Name)))}");
+                    Console.WriteLine();
+                    Console.WriteLine("1. Show lessons");
+                    Console.WriteLine("2. Select specific lessons");
+                    Console.WriteLine("3. Select all lessons");
+                    Console.WriteLine("4. Start quiz");
+                    Console.WriteLine("5. Test steno machine");
+                    Console.WriteLine("6. Exit");
+                    ConsoleKey consoleKey = Console.ReadKey(true).Key;
 
-                        string line = Console.ReadLine();
-                        string[] parsedLine = line?.Split(',');
+                    Console.WriteLine();
 
-                        if (parsedLine != null && parsedLine.All(x => _model.Lessons.Any(y => y.Name.Equals(x, StringComparison.OrdinalIgnoreCase))))
-                        {
-                            selectedLessons = _model.Lessons.Where(x => parsedLine.Contains(x.Name, StringComparer.OrdinalIgnoreCase)).ToList();
-                        }
-                        else
-                        {
+                    switch (consoleKey)
+                    {
+                        case ConsoleKey.D1:
+                        case ConsoleKey.NumPad1:
+                            foreach (string name in _model.Lessons.Select(x => x.Name))
+                            {
+                                Console.WriteLine(name);
+                            }
                             Console.WriteLine();
-                            Console.WriteLine("One or more lessons are invalid");
-                        }
+                            break;
+                        case ConsoleKey.D2:
+                        case ConsoleKey.NumPad2:
+                            Console.Write("Enter the lesson names (comma-delimited): ");
 
-                        Console.WriteLine();
-                        break;
-                    case ConsoleKey.D3:
-                    case ConsoleKey.NumPad3:
-                        selectedLessons = _model.Lessons.ToList();
-                        break;
-                    case ConsoleKey.D4:
-                    case ConsoleKey.NumPad4:
-                        QuizConfiguration(selectedLessons);
-                        break;
-                    case ConsoleKey.D5:
-                    case ConsoleKey.NumPad5:
-                        FlashcardsConfiguration(selectedLessons);
-                        break;
-                    case ConsoleKey.Escape:
-                    case ConsoleKey.D6:
-                    case ConsoleKey.NumPad6:
-                        return;
+                            string line = Console.ReadLine();
+                            string[] parsedLine = line?.Split(',');
+
+                            if (parsedLine != null && parsedLine.All(x => _model.Lessons.Any(y => y.Name.Equals(x, StringComparison.OrdinalIgnoreCase))))
+                            {
+                                selectedLessons = _model.Lessons.Where(x => parsedLine.Contains(x.Name, StringComparer.OrdinalIgnoreCase)).ToList();
+                            }
+                            else
+                            {
+                                Console.WriteLine();
+                                Console.WriteLine("One or more lessons are invalid");
+                            }
+
+                            Console.WriteLine();
+                            break;
+                        case ConsoleKey.D3:
+                        case ConsoleKey.NumPad3:
+                            selectedLessons = _model.Lessons.ToList();
+                            break;
+                        case ConsoleKey.D4:
+                        case ConsoleKey.NumPad4:
+                            QuizConfigurationAsync(selectedLessons).GetAwaiter().GetResult();
+                            break;
+                        case ConsoleKey.D5:
+                        case ConsoleKey.NumPad5:
+                            TestStenoMachineAsync().GetAwaiter().GetResult();
+                            break;
+                        case ConsoleKey.Escape:
+                        case ConsoleKey.D6:
+                        case ConsoleKey.NumPad6:
+                            return;
+                    }
                 }
+            }
+            finally
+            {
+                _stenoDevice.Close();
             }
         }
 
-        private static void QuizConfiguration(IEnumerable<LessonModel> lessons)
+        private static async Task<bool> InitializeAsync()
+        {
+            Console.Title = "Stenography Practice";
+
+            if (!Directory.Exists(_configurationDirectory))
+            {
+                Directory.CreateDirectory(_configurationDirectory);
+            }
+            if (!File.Exists(_dictionaryPath))
+            {
+                _model = new DictionaryModel
+                         {
+                             Lessons = new[]
+                                       {
+                                           new LessonModel
+                                           {
+                                               Name = "Lesson 1",
+                                               Terms = new[]
+                                                       {
+                                                           new TermModel { English = "require", Steno = "/RAOEUR" },
+                                                           new TermModel { English = "rather", Steno = "/RER" },
+                                                           new TermModel { English = "within", Steno = "/W-PB" },
+                                                           new TermModel { English = "fifth", Steno = "TPEUF/-GT" }
+                                                       }
+                                           },
+                                           new LessonModel
+                                           {
+                                               Name = "Lesson 2",
+                                               Terms = new[]
+                                                       {
+                                                           new TermModel { English = "you", Steno = "/U" },
+                                                           new TermModel { English = "I", Steno = "/EU" },
+                                                           new TermModel { English = "is the", Steno = "/S-T" },
+                                                           new TermModel { English = "month", Steno = "PHOPB/-GT" }
+                                                       }
+                                           }
+                                       }
+                         };
+
+                File.WriteAllText(_dictionaryPath, JsonConvert.SerializeObject(_model, Formatting.Indented), Encoding.UTF8);
+            }
+            else
+            {
+                _model = JsonConvert.DeserializeObject<DictionaryModel>(File.ReadAllText(_dictionaryPath, Encoding.UTF8));
+            }
+
+            Console.Clear();
+
+            Console.WriteLine("Connecting to steno machine");
+
+            _stenoDevice = StenoDevice.Open();
+
+            if (_stenoDevice != null)
+            {
+                Console.WriteLine("Flushing steno machine");
+
+                await _stenoDevice.FlushAsync();
+
+                Console.Clear();
+
+                return true;
+            }
+
+            Console.WriteLine("Steno machine not found");
+
+            return false;
+        }
+
+        private static async Task QuizConfigurationAsync(IEnumerable<LessonModel> lessons)
         {
             lessons = lessons.ToArray();
 
             Console.WriteLine($"Lesson{(lessons.Count() != 1 ? "s" : "")}: {string.Join(", ", lessons.Select(x => x.Name))}");
             Console.WriteLine();
-            Console.WriteLine("1. Display steno");
-            Console.WriteLine("2. Display English");
+            Console.WriteLine("1. Display English, prompt for steno");
+            Console.WriteLine("2. Display steno, prompt for English");
             Console.WriteLine("3. Back");
 
             ConsoleKey consoleKey = Console.ReadKey(true).Key;
@@ -109,11 +189,11 @@ namespace NathanAlden.StenographyPractice
             {
                 case ConsoleKey.D1:
                 case ConsoleKey.NumPad1:
-                    Quiz(lessons, "English", "Steno", term => term.English, term => term.Steno, StringComparison.OrdinalIgnoreCase);
+                    await QuizAsync(lessons, "English", "  Steno", term => term.English, term => term.Steno, ReadAnswerFromStenoDeviceAsync, StringComparison.OrdinalIgnoreCase);
                     break;
                 case ConsoleKey.D2:
                 case ConsoleKey.NumPad2:
-                    Quiz(lessons, "Steno", "English", term => term.Steno, term => term.English, StringComparison.Ordinal);
+                    await QuizAsync(lessons, "  Steno", "English", term => term.Steno, term => term.English, ReadAnswerFromConsoleAsync, StringComparison.Ordinal);
                     break;
                 case ConsoleKey.D3:
                 case ConsoleKey.NumPad3:
@@ -123,7 +203,14 @@ namespace NathanAlden.StenographyPractice
             }
         }
 
-        private static void Quiz(IEnumerable<LessonModel> lessons, string questionPrompt, string answerPrompt, Func<TermModel, string> questionDelegate, Func<TermModel, string> answerDelegate, StringComparison comparisonType)
+        private static async Task QuizAsync(
+            IEnumerable<LessonModel> lessons,
+            string questionPrompt,
+            string answerPrompt,
+            Func<TermModel, string> questionDelegate,
+            Func<TermModel, string> answerDelegate,
+            Func<TermModel, Task<PromptResult>> promptDelegate,
+            StringComparison comparisonType)
         {
             lessons = lessons.ToArray();
 
@@ -148,14 +235,19 @@ namespace NathanAlden.StenographyPractice
                 Console.WriteLine($"{questionPrompt}: {questionDelegate(term)}");
                 Console.Write($"{answerPrompt}: ");
 
-                string answer = Console.ReadLine();
+                PromptResult result = await promptDelegate(term);
 
-                if (string.IsNullOrEmpty(answer))
+                if (result.Type == PromptResultType.Canceled)
+                {
+                    Console.Clear();
+                    return;
+                }
+                if (string.IsNullOrEmpty(result.Answer))
                 {
                     continue;
                 }
 
-                bool correct = string.Equals(answer, answerDelegate(term), comparisonType);
+                bool correct = string.Equals(result.Answer, answerDelegate(term), comparisonType);
 
                 correctAnswers += correct ? 1 : 0;
                 totalAnswerAttempts++;
@@ -166,154 +258,122 @@ namespace NathanAlden.StenographyPractice
                     Console.WriteLine(correct ? "Correct!" : "Incorrect");
                 }
 
-                if (Console.ReadKey(true).Key != ConsoleKey.Escape)
+                Thread.Sleep(TimeSpan.FromSeconds(2));
+
+                if (correct)
                 {
-                    if (correct)
-                    {
-                        term = terms[random.Next(0, terms.Length)];
-                    }
-                    continue;
+                    term = terms[random.Next(0, terms.Length)];
                 }
-
-                Console.Clear();
-                return;
             }
         }
 
-        private static void FlashcardsConfiguration(IEnumerable<LessonModel> lessons)
+        private static async Task TestStenoMachineAsync()
         {
-            lessons = lessons.ToArray();
+            await _stenoDevice.FlushAsync();
 
-            Console.WriteLine($"Lesson{(lessons.Count() != 1 ? "s" : "")}: {string.Join(", ", lessons.Select(x => x.Name))}");
+            Console.Clear();
+            Console.WriteLine("Steno machine test");
             Console.WriteLine();
-            Console.Write("Interval in milliseconds: ");
 
-            string line = Console.ReadLine();
-            int intervalInMilliseconds;
+            IDisposable strokeReceived = _stenoDevice.StrokeReceived.Subscribe(stroke => { Console.WriteLine($"/{stroke.Steno}"); });
+            IDisposable error = _stenoDevice.Error.Subscribe(errorCode => { Console.WriteLine($"Error: {errorCode}"); });
 
-            if (!int.TryParse(line, out intervalInMilliseconds))
+            try
             {
-                return;
-            }
+                _stenoDevice.StartReadingStrokes();
 
-            TimeSpan interval = TimeSpan.FromMilliseconds(intervalInMilliseconds);
-
-            Console.WriteLine();
-            Console.WriteLine("1. Display steno first");
-            Console.WriteLine("2. Display English first");
-            Console.WriteLine("3. Back");
-
-            ConsoleKey consoleKey = Console.ReadKey(true).Key;
-
-            switch (consoleKey)
-            {
-                case ConsoleKey.D1:
-                case ConsoleKey.NumPad1:
-                    Flashcards(lessons, interval, "  Steno", "English", term => term.Steno, term => term.English);
-                    break;
-                case ConsoleKey.D2:
-                case ConsoleKey.NumPad2:
-                    Flashcards(lessons, interval, "English", "  Steno", term => term.English, term => term.Steno);
-                    break;
-                case ConsoleKey.D3:
-                case ConsoleKey.NumPad3:
-                case ConsoleKey.Escape:
-                    Console.WriteLine();
-                    return;
-            }
-        }
-
-        private static void Flashcards(IEnumerable<LessonModel> lessons, TimeSpan interval, string frontDefinition, string backDefinition, Func<TermModel, string> frontDelegate, Func<TermModel, string> backDelegate)
-        {
-            lessons = lessons.ToArray();
-
-            TermModel[] terms = lessons.SelectMany(x => x.Terms).ToArray();
-            var random = new Random();
-            string flashcardLogPath = Path.Combine(_configurationDirectory, "flashcards.csv");
-
-            using (var streamWriter = new StreamWriter(flashcardLogPath, false, Encoding.ASCII))
-            {
-                do
+                while (!Console.KeyAvailable || Console.ReadKey(true).Key != ConsoleKey.Escape)
                 {
-                    TermModel term = terms[random.Next(0, terms.Length)];
-                    string frontText = frontDelegate(term);
-                    string backText = backDelegate(term);
-
-                    streamWriter.WriteLine($"{frontText}\t{backText}");
-
-                    Console.Clear();
-
-                    Console.WriteLine($"Lesson{(lessons.Count() != 1 ? "s" : "")}: {string.Join(", ", lessons.Select(x => x.Name))}");
-                    Console.WriteLine();
-                    Console.WriteLine($"{frontDefinition}: {frontText}");
-
-                    Thread.Sleep(interval);
-
-                    if (Console.KeyAvailable)
-                    {
-                        break;
-                    }
-
-                    Console.WriteLine($"{backDefinition}: {backText}");
-
-                    Thread.Sleep(interval);
-                } while (!Console.KeyAvailable);
+                }
             }
+            finally
+            {
+                strokeReceived.Dispose();
+                error.Dispose();
 
-            DrainKeys();
+                _stenoDevice.StopReadingStrokes();
+            }
 
             Console.Clear();
         }
 
-        private static void Initialize()
+        private static Task<PromptResult> ReadAnswerFromConsoleAsync(TermModel term)
         {
-            if (!Directory.Exists(_configurationDirectory))
-            {
-                Directory.CreateDirectory(_configurationDirectory);
-            }
-            if (!File.Exists(_dictionaryPath))
-            {
-                _model = new DictionaryModel
-                         {
-                             Lessons = new[]
-                                       {
-                                           new LessonModel
-                                           {
-                                               Name = "Lesson 1",
-                                               Terms = new[]
-                                                       {
-                                                           new TermModel { English = "English", Steno = "Steno" },
-                                                           new TermModel { English = "English", Steno = "Steno" }
-                                                       }
-                                           },
-                                           new LessonModel
-                                           {
-                                               Name = "Lesson 2",
-                                               Terms = new[]
-                                                       {
-                                                           new TermModel { English = "English", Steno = "Steno" },
-                                                           new TermModel { English = "English", Steno = "Steno" }
-                                                       }
-                                           }
-                                       }
-                         };
+            string line = Console.ReadLine();
 
-                File.WriteAllText(_dictionaryPath, JsonConvert.SerializeObject(_model, Formatting.Indented), Encoding.UTF8);
-            }
-            else
-            {
-                _model = JsonConvert.DeserializeObject<DictionaryModel>(File.ReadAllText(_dictionaryPath, Encoding.UTF8));
-            }
-
-            Console.Title = "Stenography Practice";
+            return Task.FromResult(string.IsNullOrEmpty(line) ? PromptResult.Canceled() : PromptResult.Success(line));
         }
 
-        private static void DrainKeys()
+        private static async Task<PromptResult> ReadAnswerFromStenoDeviceAsync(TermModel term)
         {
-            while (Console.KeyAvailable)
+            string[] strokesAsSteno = term.Steno.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            var strokes = new List<Stroke>();
+            var cancellationTokenSource = new CancellationTokenSource();
+            IDisposable strokesReceived = _stenoDevice.StrokeReceived.Subscribe(
+                stroke =>
+                {
+                    strokes.Add(stroke);
+                    if (strokes.Count == strokesAsSteno.Length)
+                    {
+                        cancellationTokenSource.Cancel();
+                    }
+                });
+
+            _stenoDevice.StartReadingStrokes();
+
+            try
             {
-                Console.ReadKey(true);
+                while (!cancellationTokenSource.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1), cancellationTokenSource.Token);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                    }
+                }
             }
+            finally
+            {
+                strokesReceived.Dispose();
+
+                _stenoDevice.StopReadingStrokes();
+            }
+
+            string steno = strokes.Count == 1 ? $"/{strokes[0].Steno}" : string.Join("/", strokes.Select(x => x.Steno));
+
+            Console.WriteLine(steno);
+
+            return PromptResult.Success(steno);
+        }
+
+        private class PromptResult
+        {
+            private PromptResult(PromptResultType type, string answer = null)
+            {
+                Type = type;
+                Answer = answer;
+            }
+
+            public PromptResultType Type { get; }
+            public string Answer { get; }
+
+            public static PromptResult Success(string answer)
+            {
+                return new PromptResult(PromptResultType.Success, answer);
+            }
+
+            public static PromptResult Canceled()
+            {
+                return new PromptResult(PromptResultType.Canceled);
+            }
+        }
+
+        private enum PromptResultType
+        {
+            Success,
+            Canceled
         }
     }
 }
